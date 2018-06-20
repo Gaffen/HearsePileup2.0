@@ -1,59 +1,99 @@
 <template lang="html">
   <div class="RecordPlayer">
-    <canvas class="disc" ref="disc" width="320" height="320"/>
+    <button class="toggle" v-on:click="togglePlay">
+      <svg v-if="playing === false">
+        <use :xlink:href="playIcon" />
+      </svg>
+      <svg v-else>
+        <use :xlink:href="pauseIcon" />
+      </svg>
+    </button>
+    <canvas class="disc" ref="disc" v-bind:width="canvasSize" v-bind:height="canvasSize" v-on:mousedown="beginScrubbing"/>
+    <p class="devinfo">
+      Scrubbing: {{scrubbing}}
+    </p>
   </div>
 </template>
 
 <script>
+import play from '~/assets/svg/play.svg';
+import pause from '~/assets/svg/pause.svg';
+
 export default {
 	props: ['record'],
 	data: function(args) {
-		return {};
+		let maxRecordSize = 320 - 40;
+		let maxRecordInnerSize = 100;
+		return {
+			playing: false,
+			scrubbing: false,
+			playIcon: play.url,
+			pauseIcon: pause.url,
+			playPosition: 0,
+			buffered: 0,
+			mousePos: null,
+			initialised: false,
+			bassBoom: 1,
+			canvasSize: 320,
+			maxRecordSize,
+			minRecordSize: maxRecordSize - maxRecordSize / 6,
+			maxRecordInnerSize,
+			recordInnerSize: maxRecordInnerSize,
+			recordSize: maxRecordSize
+		};
 	},
 	mounted: function() {
 		this.audioElement = document.createElement('audio');
 		this.audioElement.src = this.record;
-		this.audioElement.play();
+		let disc = this.$refs.disc;
+		this.discCtx = disc.getContext('2d');
+
+		this.drawUI();
+
+		console.log(this.maxRecordSize - this.minRecordSize);
 
 		this.audioElement.addEventListener('playing', () => {
-			let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-			this.analyser = audioCtx.createAnalyser();
-			let source = audioCtx.createMediaStreamSource(
-				this.audioElement.captureStream()
-			);
-			source.connect(this.analyser);
+			if (!this.initialised) {
+				this.initialised = true;
+			}
+			if (!this.analyser) {
+				let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+				this.analyser = audioCtx.createAnalyser();
+				let source = audioCtx.createMediaStreamSource(
+					this.audioElement.captureStream()
+				);
+				source.connect(this.analyser);
 
-			this.analyser.fftSize = 256;
-			this.analyser.smoothingTimeConstant = 0.3;
-			this.bufferLength = this.analyser.frequencyBinCount;
-			this.dataArray = new Uint8Array(this.bufferLength);
-			let disc = this.$refs.disc;
-
-			this.discCtx = disc.getContext('2d');
-			this.discCtx.clearRect(0, 0, disc.width, disc.height);
-			this.draw();
-			ctx.beginPath();
-			ctx.strokeStyle = 'rgb(38, 38, 38)';
-			ctx.arc(
-				disc.width / 2,
-				disc.height / 2,
-				disc.width / 2 - 4,
-				0,
-				Math.PI * 2
-			);
-			ctx.stroke();
+				this.analyser.fftSize = 256;
+				this.analyser.smoothingTimeConstant = 0.3;
+				this.bufferLength = this.analyser.frequencyBinCount;
+				this.dataArray = new Uint8Array(this.bufferLength);
+			}
 		});
 	},
 	methods: {
 		draw: function() {
-			let drawVisual = requestAnimationFrame(this.draw);
-			this.analyser.getByteFrequencyData(this.dataArray);
+			if (this.playing || this.scrubbing) {
+				let drawVisual = requestAnimationFrame(this.draw);
+			}
 
 			let disc = this.$refs.disc;
 			let ctx = this.discCtx;
 
 			ctx.clearRect(0, 0, disc.width, disc.height);
 
+			this.drawUI();
+
+			if (this.analyser) {
+				this.runAnalysis();
+			}
+		},
+		drawUI: function() {
+			let ctx = this.discCtx;
+			let disc = this.$refs.disc;
+
+			// Outer ring
+			ctx.lineWidth = 3;
 			ctx.beginPath();
 			ctx.strokeStyle = 'rgb(38, 38, 38)';
 			ctx.arc(
@@ -63,39 +103,220 @@ export default {
 				0,
 				Math.PI * 2
 			);
+			ctx.closePath();
 			ctx.stroke();
 
+			// Inner Ring
 			ctx.beginPath();
-			ctx.strokeStyle = 'rgb(38, 38, 38)';
 			ctx.arc(disc.width / 2, disc.height / 2, 80 / 2, 0, Math.PI * 2);
+			ctx.closePath();
 			ctx.stroke();
 
-			ctx.fillStyle = 'rgba(0, 0, 0, 0)';
-			ctx.lineWidth = 2;
+			if (this.initialised) {
+				this.drawRecord();
+			}
+		},
+		runAnalysis: function() {
+			let ctx = this.discCtx;
+			let disc = this.$refs.disc;
+			this.analyser.getByteFrequencyData(this.dataArray);
 
-			let barWidth = disc.width / this.bufferLength * 2.5;
-			let barHeight;
-			let x = 0;
+			let bassSample = this.dataArray.slice(this.dataArray.length / 4);
+			let bassVolume =
+				bassSample.reduce((accumulated, vol) => {
+					return accumulated + vol;
+				}, 0) /
+				(this.dataArray.length / 4);
 
-			// this.dataArray.forEach((data, i) => {
-			// 	barHeight = data;
-			//
-			// 	ctx.fillStyle = 'rgb(' + (barHeight + 100) + ',50,50)';
-			// 	ctx.fillRect(x, disc.height - barHeight / 2, barWidth, barHeight);
-			//
-			// 	x += barWidth + 1;
-			// });
+			this.bassBoom = bassVolume / 255;
 
-			// ctx.lineTo(disc.width, disc.height / 2);
-			ctx.stroke();
+			let variance = this.bassBoom * (this.maxRecordSize - this.minRecordSize);
+
+			this.recordSize = this.minRecordSize + variance;
+			this.recordInnerSize = this.maxRecordInnerSize + variance;
+		},
+		drawRecord: function() {
+			let ctx = this.discCtx;
+			let disc = this.$refs.disc;
+
+			// White Disc
+			ctx.fillStyle = 'rgb(255, 255, 255)';
+			ctx.beginPath();
+			ctx.arc(
+				disc.width / 2,
+				disc.height / 2,
+				this.recordSize / 2,
+				0,
+				Math.PI * 2,
+				false
+			);
+			ctx.arc(
+				disc.width / 2,
+				disc.height / 2,
+				this.recordInnerSize / 2,
+				0,
+				Math.PI * 2,
+				true
+			);
+			ctx.closePath();
+			ctx.fill();
+
+			if (this.audioElement.buffered.length > 0) {
+				let buffered = this.audioElement.buffered;
+				this.buffered =
+					this.audioElement.buffered.end(
+						this.audioElement.buffered.length - 1
+					) /
+					this.audioElement.duration *
+					100;
+			}
+
+			if (this.audioElement.duration) {
+				this.playPosition =
+					this.audioElement.currentTime / this.audioElement.duration * 100;
+			}
+
+			// Buffered Ring
+			this.drawProgressBar('rgb(200, 200, 200)', this.buffered);
+
+			// Playhead Position
+			this.drawProgressBar('rgb(0, 0, 0)', this.playPosition);
+		},
+		drawProgressBar: function(color, percentage) {
+			let ctx = this.discCtx;
+			let disc = this.$refs.disc;
+			let startPos = Math.PI * 2 - Math.PI / 2;
+			let progressPosition = startPos + Math.PI * 2 / 100 * percentage;
+
+			ctx.fillStyle = color;
+			ctx.beginPath();
+			ctx.arc(
+				disc.width / 2,
+				disc.height / 2,
+				this.recordSize / 2,
+				progressPosition,
+				startPos,
+				true
+			);
+			ctx.lineTo(disc.width / 2, disc.height / 2 - 11 / 2);
+			ctx.arc(
+				disc.width / 2,
+				disc.height / 2,
+				this.recordInnerSize / 2,
+				startPos,
+				progressPosition,
+				false
+			);
+			ctx.closePath();
+			ctx.fill();
+		},
+		togglePlay: function() {
+			if (!this.playing) {
+				this.audioElement.play();
+				this.playing = !this.playing;
+				this.draw();
+			} else {
+				this.audioElement.pause();
+				this.playing = !this.playing;
+			}
+		},
+		beginScrubbing: function(e) {
+			if (this.initialised) {
+				this.scrubbing = true;
+				this.draw();
+
+				window.addEventListener('mouseup', this.finishScrubbing);
+				window.addEventListener('mousemove', this.scrub);
+
+				this.scrub(e);
+
+				if (e.stopPropagation) e.stopPropagation();
+				if (e.preventDefault) e.preventDefault();
+				e.cancelBubble = true;
+				e.returnValue = false;
+				return false;
+			}
+		},
+		scrub: function(e) {
+			let discPos = this.$refs.disc.getBoundingClientRect();
+			let centre = {
+				x: discPos.x + discPos.width / 2,
+				y: discPos.y + discPos.height / 2
+			};
+			let mousePos = { x: e.clientX, y: e.clientY };
+
+			let angle =
+				Math.atan2(centre.y - mousePos.y, centre.x - mousePos.x) +
+				Math.PI +
+				Math.PI / 2;
+
+			angle = angle > Math.PI * 2 ? angle - Math.PI * 2 : angle;
+
+			let position = angle / (Math.PI * 2);
+
+			this.audioElement.currentTime = this.audioElement.duration * position;
+		},
+		finishScrubbing: function(e) {
+			this.scrubbing = false;
+			window.removeEventListener('mouseup', this.finishScrubbing);
+			window.removeEventListener('mousemove', this.scrub);
 		}
 	}
 };
 </script>
 
 <style lang="scss" scoped>
+@import '~/assets/scss/_vars.scss';
+
+.RecordPlayer {
+	position: relative;
+	width: 160px;
+	height: 160px;
+}
+
 .disc {
 	width: 160px;
 	height: 160px;
+
+	&:hover {
+		cursor: pointer;
+	}
+}
+
+.toggle {
+	position: absolute;
+	width: 38px;
+	height: 38px;
+	top: 61px;
+	left: 61px;
+	border: 0;
+	background: none;
+	border-radius: 50%;
+	background: linear-gradient(#191919, #000);
+
+	&:focus {
+		outline: none;
+	}
+
+	&:hover {
+		cursor: pointer;
+		background: linear-gradient(#000, #191919);
+	}
+
+	svg {
+		fill: $white;
+		width: 10px;
+		height: 10px;
+		display: block;
+		margin: auto;
+	}
+}
+
+.devinfo {
+	position: absolute;
+	top: 100%;
+	width: 100%;
+	display: block;
+	text-align: center;
 }
 </style>

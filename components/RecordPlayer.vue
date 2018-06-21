@@ -9,6 +9,7 @@
       </svg>
     </button>
     <canvas class="disc" ref="disc" v-bind:width="canvasSize" v-bind:height="canvasSize" v-on:mousedown="beginScrubbing"/>
+    <canvas ref="cache" v-bind:width="canvasSize" v-bind:height="canvasSize"/>
     <p class="devinfo">
       Scrubbing: {{scrubbing}}
     </p>
@@ -39,18 +40,26 @@ export default {
 			minRecordSize: maxRecordSize - maxRecordSize / 6,
 			maxRecordInnerSize,
 			recordInnerSize: maxRecordInnerSize,
-			recordSize: maxRecordSize
+			recordSize: maxRecordSize,
+			eqBarCache: null,
+			eqBarWidth: 0,
+			eqBarRotation: 0,
+			eqSampleSize: 4
 		};
 	},
 	mounted: function() {
 		this.audioElement = document.createElement('audio');
 		this.audioElement.src = this.record;
 		let disc = this.$refs.disc;
+
+		// this.eqBarCache = document.createElement('canvas');
+		this.eqBarCache = this.$refs.cache;
+		this.eqBarCache.width = 80;
+		this.eqBarCache.height = disc.height / 2;
+
 		this.discCtx = disc.getContext('2d');
 
 		this.drawUI();
-
-		console.log(this.maxRecordSize - this.minRecordSize);
 
 		this.audioElement.addEventListener('playing', () => {
 			if (!this.initialised) {
@@ -68,10 +77,48 @@ export default {
 				this.analyser.smoothingTimeConstant = 0.3;
 				this.bufferLength = this.analyser.frequencyBinCount;
 				this.dataArray = new Uint8Array(this.bufferLength);
+				this.freqArray = new Uint8Array(this.bufferLength);
+
+				let segmentWidth = 360 / (this.analyser.fftSize / this.eqSampleSize);
+
+				this.eqBarWidth = segmentWidth / 5 * 3 * (Math.PI / 180);
+				this.eqBarRotation = segmentWidth / (Math.PI / 180);
+
+				console.log(
+					segmentWidth * (this.analyser.fftSize / this.eqSampleSize),
+					segmentWidth / 5 * 3,
+					this.analyser.fftSize,
+					this.eqSampleSize,
+					this.analyser.fftSize / this.eqSampleSize
+				);
+
+				this.createBarData();
 			}
 		});
 	},
 	methods: {
+		createBarData: function() {
+			let ctx = this.eqBarCache.getContext('2d');
+			let disc = this.$refs.disc;
+
+			ctx.fillStyle = 'rgba(0, 0, 0, 0.0)';
+			ctx.clearRect(0, 0, ctx.width, ctx.height);
+
+			ctx.fillStyle = 'rgb(255, 255, 255)';
+			ctx.beginPath();
+			ctx.moveTo(0, this.eqBarCache.height);
+			ctx.arc(
+				0,
+				disc.height / 2,
+				disc.height / 2,
+				0 - Math.PI / 2,
+				this.eqBarWidth - Math.PI / 2
+				// Math.PI * 2
+			);
+			// ctx.moveTo(0, this.eqBarCache.height);
+			ctx.closePath();
+			ctx.fill();
+		},
 		draw: function() {
 			if (this.playing || this.scrubbing) {
 				let drawVisual = requestAnimationFrame(this.draw);
@@ -120,6 +167,7 @@ export default {
 			let ctx = this.discCtx;
 			let disc = this.$refs.disc;
 			this.analyser.getByteFrequencyData(this.dataArray);
+			this.analyser.getByteTimeDomainData(this.freqArray);
 
 			let bassSample = this.dataArray.slice(this.dataArray.length / 4);
 			let bassVolume =
@@ -181,6 +229,8 @@ export default {
 
 			// Playhead Position
 			this.drawProgressBar('rgb(0, 0, 0)', this.playPosition);
+
+			this.drawEqualizerBars();
 		},
 		drawProgressBar: function(color, percentage) {
 			let ctx = this.discCtx;
@@ -209,6 +259,34 @@ export default {
 			);
 			ctx.closePath();
 			ctx.fill();
+		},
+		drawEqualizerBars() {
+			let ctx = this.discCtx;
+			let disc = this.$refs.disc;
+			let dataPoints = [];
+
+			let rotateAmount = this.eqBarRotation;
+			// console.log(this.freqArray.length / this.eqSampleSize);
+
+			for (var i = 0; i < this.freqArray.length; i += this.eqSampleSize) {
+				dataPoints.push(this.freqArray.slice(i, i + this.eqSampleSize));
+			}
+
+			dataPoints.forEach((freqData, i) => {
+				ctx.translate(disc.width / 2, disc.height / 2);
+				ctx.rotate(rotateAmount * i);
+				ctx.drawImage(
+					this.eqBarCache,
+					/*disc.width / 2*/ 0,
+					-(disc.height / 2)
+				);
+				ctx.rotate(-(rotateAmount * i));
+				ctx.translate(-(disc.width / 2), -(disc.height / 2));
+			});
+
+			// console.log(dataPoints);
+
+			// let cacheCtx = this.eqBarCache.getContext('2d');
 		},
 		togglePlay: function() {
 			if (!this.playing) {

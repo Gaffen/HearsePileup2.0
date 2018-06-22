@@ -1,7 +1,7 @@
 <template>
   <div style="padding-top: 100px;">
 
-    <RecordPlayer record="/audio/pretty_shiny_things.mp3"/>
+    <RecordPlayer record="/audio/generation_y.mp3"/>
 
   </div>
 </template>

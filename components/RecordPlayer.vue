@@ -9,7 +9,6 @@
       </svg>
     </button>
     <canvas class="disc" ref="disc" v-bind:width="canvasSize" v-bind:height="canvasSize" v-on:mousedown="beginScrubbing"/>
-    <canvas ref="cache" v-bind:width="canvasSize" v-bind:height="canvasSize"/>
     <p class="devinfo">
       Scrubbing: {{scrubbing}}
     </p>
@@ -44,7 +43,7 @@ export default {
 			eqBarCache: null,
 			eqBarWidth: 0,
 			eqBarRotation: 0,
-			eqSampleSize: 4
+			eqSampleSize: 2
 		};
 	},
 	mounted: function() {
@@ -52,10 +51,13 @@ export default {
 		this.audioElement.src = this.record;
 		let disc = this.$refs.disc;
 
-		// this.eqBarCache = document.createElement('canvas');
-		this.eqBarCache = this.$refs.cache;
+		this.eqBarCache = document.createElement('canvas');
+		this.eqBarCacheWhite = document.createElement('canvas');
+		// this.eqBarCache = this.$refs.cache;
 		this.eqBarCache.width = 80;
 		this.eqBarCache.height = disc.height / 2;
+		this.eqBarCacheWhite.width = 80;
+		this.eqBarCacheWhite.height = disc.height / 2;
 
 		this.discCtx = disc.getContext('2d');
 
@@ -79,18 +81,11 @@ export default {
 				this.dataArray = new Uint8Array(this.bufferLength);
 				this.freqArray = new Uint8Array(this.bufferLength);
 
-				let segmentWidth = 360 / (this.analyser.fftSize / this.eqSampleSize);
+				let segmentWidth =
+					360 / (this.analyser.fftSize / (this.eqSampleSize * 2));
 
 				this.eqBarWidth = segmentWidth / 5 * 3 * (Math.PI / 180);
-				this.eqBarRotation = segmentWidth / (Math.PI / 180);
-
-				console.log(
-					segmentWidth * (this.analyser.fftSize / this.eqSampleSize),
-					segmentWidth / 5 * 3,
-					this.analyser.fftSize,
-					this.eqSampleSize,
-					this.analyser.fftSize / this.eqSampleSize
-				);
+				this.eqBarRotation = segmentWidth * (Math.PI / 180);
 
 				this.createBarData();
 			}
@@ -98,13 +93,17 @@ export default {
 	},
 	methods: {
 		createBarData: function() {
-			let ctx = this.eqBarCache.getContext('2d');
+			this.drawBar(this.eqBarCache, 'rgb(0, 0, 0)');
+			this.drawBar(this.eqBarCacheWhite, 'rgb(255, 255, 255)');
+		},
+		drawBar: function(canvas, colour) {
+			let ctx = canvas.getContext('2d');
 			let disc = this.$refs.disc;
 
 			ctx.fillStyle = 'rgba(0, 0, 0, 0.0)';
 			ctx.clearRect(0, 0, ctx.width, ctx.height);
 
-			ctx.fillStyle = 'rgb(255, 255, 255)';
+			ctx.fillStyle = colour;
 			ctx.beginPath();
 			ctx.moveTo(0, this.eqBarCache.height);
 			ctx.arc(
@@ -268,25 +267,71 @@ export default {
 			let rotateAmount = this.eqBarRotation;
 			// console.log(this.freqArray.length / this.eqSampleSize);
 
-			for (var i = 0; i < this.freqArray.length; i += this.eqSampleSize) {
+			for (let i = 0; i < this.freqArray.length; i += this.eqSampleSize) {
 				dataPoints.push(this.freqArray.slice(i, i + this.eqSampleSize));
 			}
 
 			dataPoints.forEach((freqData, i) => {
+				let mean =
+					freqData.reduce((dataPoint, total) => {
+						return total + dataPoint;
+					}, 0) / freqData.length;
+				let multiplier = (mean - 126) / 100;
+				let ringWidth = this.recordSize - this.recordInnerSize;
+
+				let barSize = (this.recordInnerSize + ringWidth * multiplier) / 2;
+
+				barSize = barSize >= 0 ? barSize : 0;
+
+				// if (i === 0) {
+				// 	console.log(barSize, this.recordInnerSize);
+				// }
+
+				ctx.save();
+				ctx.beginPath();
+				// if (barSize < this.recordInnerSize / 2) {
+				ctx.arc(
+					disc.width / 2,
+					disc.height / 2,
+					this.recordInnerSize / 2,
+					0,
+					Math.PI * 2,
+					barSize < this.recordInnerSize / 2
+				);
+				// }
+
+				// if (i === 3) {
+				// 	console.log(
+				// 		this.playPosition,
+				// 		i / dataPoints.length * 100,
+				// 		this.playPosition < i / dataPoints.length * 100
+				// 	);
+				// }
+
+				ctx.arc(
+					disc.width / 2,
+					disc.height / 2,
+					barSize,
+					0,
+					Math.PI * 2,
+					barSize > this.recordInnerSize / 2
+				);
+				ctx.closePath();
 				ctx.translate(disc.width / 2, disc.height / 2);
 				ctx.rotate(rotateAmount * i);
+				ctx.clip();
 				ctx.drawImage(
-					this.eqBarCache,
+					barSize > this.recordInnerSize / 2 &&
+					this.playPosition < i / dataPoints.length * 100
+						? this.eqBarCache
+						: this.eqBarCacheWhite,
 					/*disc.width / 2*/ 0,
 					-(disc.height / 2)
 				);
 				ctx.rotate(-(rotateAmount * i));
 				ctx.translate(-(disc.width / 2), -(disc.height / 2));
+				ctx.restore();
 			});
-
-			// console.log(dataPoints);
-
-			// let cacheCtx = this.eqBarCache.getContext('2d');
 		},
 		togglePlay: function() {
 			if (!this.playing) {

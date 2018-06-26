@@ -10,7 +10,7 @@ export default {};
 
 <style lang="scss" scoped>
 .GridWrap {
-	max-width: 980px;
+	width: 100%;
 	margin: auto;
 	padding: 0 10px;
 }

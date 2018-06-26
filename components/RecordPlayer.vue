@@ -68,12 +68,13 @@ export default {
 				this.initialised = true;
 			}
 			if (!this.analyser) {
-				let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-				this.analyser = audioCtx.createAnalyser();
-				let source = audioCtx.createMediaStreamSource(
+				this.audioCtx = new (window.AudioContext ||
+					window.webkitAudioContext)();
+				this.analyser = this.audioCtx.createAnalyser();
+				this.source = this.audioCtx.createMediaStreamSource(
 					this.audioElement.captureStream()
 				);
-				source.connect(this.analyser);
+				this.source.connect(this.analyser);
 
 				this.analyser.fftSize = 256;
 				this.analyser.smoothingTimeConstant = 0.3;
@@ -88,7 +89,18 @@ export default {
 				this.eqBarRotation = segmentWidth * (Math.PI / 180);
 
 				this.createBarData();
+			} else {
+				// let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+				this.source = this.audioCtx.createMediaStreamSource(
+					this.audioElement.captureStream()
+				);
+				this.source.connect(this.analyser);
 			}
+		});
+		this.audioElement.addEventListener('ended', () => {
+			this.playing = false;
+			this.initialised = false;
+			this.drawUI();
 		});
 	},
 	methods: {
@@ -296,7 +308,7 @@ export default {
 					this.recordInnerSize / 2,
 					0,
 					Math.PI * 2,
-					barSize < this.recordInnerSize / 2
+					barSize <= this.recordInnerSize / 2
 				);
 				// }
 
